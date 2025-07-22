@@ -55,11 +55,20 @@ def get_ret_type_of_fun(
     if fun_def is None:
         logger.debug('no typeshed stubs for module')
         return None
-    if not isinstance(fun_def.ast, ast.FunctionDef):
-        logger.debug('resolved call target is not a function')
-        return None
-    ret_node = fun_def.ast.returns
-    return conv_node_to_type(mod_name, ret_node)
+    if isinstance(fun_def.ast, ast.FunctionDef):
+        ret_node = fun_def.ast.returns
+        return conv_node_to_type(mod_name, ret_node)
+    if isinstance(fun_def.ast, ast.ClassDef):
+        # FIXME: what if there is more than one base?
+        type = Type.new(fun_name)
+        # for base in fun_def.ast.bases:
+        #     basetype = conv_node_to_type(mod_name, base)
+        #     if basetype is not None:
+        #         print(type, basetype)
+        #         type = type.merge(basetype)
+        return type
+    logger.debug('resolved call target is not a function or class def', fun_def)
+    return None
 
 
 def conv_node_to_type(

@@ -88,7 +88,8 @@ from astypes import get_type
     ('[1,2].count(1)',  'int'),
     ('list(x).copy()',  'list'),
     ('[].copy()',       'list'),
-    ('[].__iter__()',   'Iterator'),
+    ('[].__iter__()',   'Iterator'), 
+    ('range(5)',        'range'),
 
     # builtin functions
     ('len(x)',          'int'),
@@ -146,10 +147,14 @@ def test_cannot_infer_expr(expr):
     ('from math import sin',        'sin(x)',       'float'),
     ('my_list = list',              'my_list(x)',   'list'),
     ('def g(x): return 0',          'g(x)',         'int'),
-    ('def g(x): \n for i in [1,2]:\n  return i',          'g(x)',         'int'),
+    ('def g(x): \n for i in [1,2]:\n  return i',    'g(x)',         'int'),
+    ('class foo:\n def g(x):\n  return x',          'foo()',        'foo'),
+    ('class foo:\n def g(x):\n  return x\nclass bar(foo):\n def h():\n  return 0',          'bar()',        'bar'),
     ('x = 13',                      'x',            'int'),
     ('x = 1\nif x:\n  x=True',      'x',            'int | bool'),
     ('from datetime import *',      'date(1,2,3)',  'date'),
+    ('import numpy as np',          'np.zeros((4,4), int)',   'ndarray'),
+    ('import numpy as np',          'np.array((4,4), int)',   'ndarray')
 ])
 def test_astroid_inference(setup, expr, type):
     stmt = astroid.parse(f'{setup}\n{expr}').body[-1]
