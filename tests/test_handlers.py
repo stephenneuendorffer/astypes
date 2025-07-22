@@ -146,6 +146,7 @@ def test_cannot_infer_expr(expr):
     ('from math import sin',        'sin(x)',       'float'),
     ('my_list = list',              'my_list(x)',   'list'),
     ('def g(x): return 0',          'g(x)',         'int'),
+    ('def g(x): \n for i in [1,2]:\n  return i',          'g(x)',         'int'),
     ('x = 13',                      'x',            'int'),
     ('x = 1\nif x:\n  x=True',      'x',            'int | bool'),
     ('from datetime import *',      'date(1,2,3)',  'date'),

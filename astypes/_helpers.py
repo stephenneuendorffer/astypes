@@ -110,12 +110,3 @@ def conv_node_to_type(
 
     logger.debug('cannot resolve return AST node into a known type')
     return None
-
-
-def get_parent_function(node: astroid.NodeNG) -> astroid.FunctionDef | None:
-    """Find the node of the function that contains the given node.
-    """
-    for parent in node.node_ancestors():
-        if isinstance(parent, astroid.FunctionDef):
-            return parent
-    return None

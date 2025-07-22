@@ -11,7 +11,7 @@ import typeshed_client
 
 from ._ass import Ass
 from ._helpers import (
-    conv_node_to_type, get_parent_function, get_ret_type_of_fun, infer,
+    conv_node_to_type, get_ret_type_of_fun, infer,
     is_camel, qname_to_type,
 )
 from ._type import Type
@@ -228,45 +228,56 @@ def _handle_call(node: astroid.Call) -> Type | None:
 @handlers.register(astroid.Name)
 def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
     """
+    Look in an outer scope of the operation to find a definition
+    of the name.
     If the node is a name of an annotated function argument,
-    use that annotation.
+    use that annotation.  If the name is defined in a loop body,
+    infer the type from the type of the iterator.
     """
-    func_node = get_parent_function(node)
-    if func_node is None:
-        return None
-    args = func_node.args
-    anns: Iterator[tuple[astroid.AssignName, astroid.NodeNG]] = chain(
-        zip(args.args, args.annotations),
-        zip(args.posonlyargs, args.posonlyargs_annotations),
-        zip(args.kwonlyargs, args.kwonlyargs_annotations),
-    )
-    for arg, ann in anns:
-        if arg.name != node.name:
-            continue
-        if ann is None:
-            continue
-        result = conv_node_to_type('__main__', ann)
-        if result is None:
-            return None
-        return result.add_ass(Ass.NO_REDEF)
+    for parent in node.node_ancestors():
+        if isinstance(parent, astroid.For):
+            if parent.target.name != node.name:
+                continue
+            itertype = get_type(parent.iter)
+            if itertype._name == "Sequence":
+                return itertype._args[0]
+            else:
+                return None
+        if isinstance(parent, astroid.FunctionDef):
+            func_node = parent
+            args = func_node.args
+            anns: Iterator[tuple[astroid.AssignName, astroid.NodeNG]] = chain(
+                zip(args.args, args.annotations),
+                zip(args.posonlyargs, args.posonlyargs_annotations),
+                zip(args.kwonlyargs, args.kwonlyargs_annotations),
+            )
+            for arg, ann in anns:
+                if arg.name != node.name:
+                    continue
+                if ann is None:
+                    continue
+                result = conv_node_to_type('__main__', ann)
+                if result is None:
+                    return None
+                return result.add_ass(Ass.NO_REDEF)
 
-    if args.vararg is not None and args.vararg == node.name:
-        ann = args.varargannotation
-        if ann is not None:
-            result = conv_node_to_type('__main__', ann)
-            if result is not None:
-                return Type.new('tuple', args=[result], ass={Ass.NO_REDEF})
-        return Type.new('tuple', ass={Ass.NO_REDEF})
+            if args.vararg is not None and args.vararg == node.name:
+                ann = args.varargannotation
+                if ann is not None:
+                    result = conv_node_to_type('__main__', ann)
+                    if result is not None:
+                        return Type.new('tuple', args=[result], ass={Ass.NO_REDEF})
+                return Type.new('tuple', ass={Ass.NO_REDEF})
 
-    if args.kwarg is not None and args.kwarg == node.name:
-        ann = args.kwargannotation
-        if ann is not None:
-            result = conv_node_to_type('__main__', ann)
-            if result is not None:
-                targs = [Type.new('str'), result]
-                return Type.new('dict', args=targs, ass={Ass.NO_REDEF})
-        targs = [Type.new('str'), Type.new('Any', module='typing')]
-        return Type.new(name='dict', args=targs, ass={Ass.NO_REDEF})
+            if args.kwarg is not None and args.kwarg == node.name:
+                ann = args.kwargannotation
+                if ann is not None:
+                    result = conv_node_to_type('__main__', ann)
+                    if result is not None:
+                        targs = [Type.new('str'), result]
+                        return Type.new('dict', args=targs, ass={Ass.NO_REDEF})
+                targs = [Type.new('str'), Type.new('Any', module='typing')]
+                return Type.new(name='dict', args=targs, ass={Ass.NO_REDEF})
 
     return None
 
