@@ -121,6 +121,14 @@ def _handle_dict(node: astroid.Dict) -> Type | None:
         values_type = Type.new('Any', module='typing')
     return Type.new('dict', args=[keys_type, values_type])
 
+@handlers.register(astroid.Subscript)
+def _handle_subscript(node: astroid.Subscript) -> Type | None:
+    t = get_type(node.value)
+    if t is None:
+        return Type.new('None')
+    element_type = Type.new('')
+    element_type = element_type.merge(t._args[0])
+    return element_type
 
 @handlers.register(astroid.Set)
 def _handle_set(node: astroid.Set) -> Type | None:

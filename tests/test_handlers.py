@@ -41,6 +41,12 @@ from astypes import get_type
     ('{x,y}',       'set'),
     ('{1,""}',      'set[int | str]'),
 
+    # Subscripts
+    ('x[0]',        'None'),
+    ('[1][0]',      'int'),
+    ('[1,2,3][x]',  'int'),
+    ('[1.0][0]',    'float'),
+
     # collection constructors
     ('list()',      'list'),
     ('list(x)',     'list'),
