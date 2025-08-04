@@ -31,6 +31,7 @@ class Type:
     _args: list[Type]   # arguments of the type for generic types
     _ass: set[Ass]      # assumptions that  were made to infer the type
     _module: str        # the module where the type is defined, empty for built-ins
+    _basetypes: list[Type]  # Any possible base types
 
     @classmethod
     def new(
@@ -47,6 +48,7 @@ class Type:
             _args=args or [],
             _ass=ass or set(),
             _module=module,
+            _basetypes=[],
         )
 
     @property
@@ -194,3 +196,12 @@ class Type:
         if self.args != other.args:
             return False
         return True
+
+    def get_sequence_basetype(self) -> Type | None:
+        if self._name == "Sequence" or self._name == "list":
+            return self
+        for t in self._basetypes:
+            base = t.get_sequence_basetype()
+            if base is not None:
+                return base
+        return None

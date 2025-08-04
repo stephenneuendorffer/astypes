@@ -9,7 +9,6 @@ import typeshed_client
 from ._ass import Ass
 from ._type import Type
 
-
 logger = getLogger(__package__)
 
 
@@ -47,6 +46,7 @@ def get_ret_type_of_fun(
 ) -> Type | None:
     """For the given module and function name, get return type of the function.
     """
+    logger.debug(f"Getting return type for {mod_name}.{fun_name}")
     module = typeshed_client.get_stub_names(mod_name)
     if module is None:
         logger.debug(f'no typeshed stubs for module {mod_name}')
@@ -57,15 +57,17 @@ def get_ret_type_of_fun(
         return None
     if isinstance(fun_def.ast, ast.FunctionDef):
         ret_node = fun_def.ast.returns
-        return conv_node_to_type(mod_name, ret_node)
+        result = conv_node_to_type(mod_name, ret_node)
+        logger.debug(f'Result type is {result}')
+        return result
     if isinstance(fun_def.ast, ast.ClassDef):
         # FIXME: what if there is more than one base?
         type = Type.new(fun_name)
-        # for base in fun_def.ast.bases:
-        #     basetype = conv_node_to_type(mod_name, base)
-        #     if basetype is not None:
-        #         print(type, basetype)
-        #         type = type.merge(basetype)
+        for base in fun_def.ast.bases:
+            basetype = conv_node_to_type(mod_name, base)
+            if basetype is not None:
+                type._basetypes.append(basetype)
+        logger.debug(f'Result type is {type}')
         return type
     logger.debug('resolved call target is not a function or class def', fun_def)
     return None
@@ -130,17 +132,17 @@ def get_parent_function(node: astroid.NodeNG) -> astroid.FunctionDef | None:
     return None
 
 
-def get_parent_scope(node: astroid.NodeNG) -> astroid.NodeNG:
-    """Find the scope that contains the given node (function, class, or module).
-    """
-    for parent in node.node_ancestors():
-        if isinstance(parent, (astroid.FunctionDef, astroid.ClassDef, astroid.Module)):
-            return parent
-    # Should never happen, but return module as fallback
-    return node.root()
+# def get_parent_scope(node: astroid.NodeNG) -> astroid.NodeNG:
+#     """Find the scope that contains the given node (function, class, or module).
+#     """
+#     for parent in node.node_ancestors():
+#         if isinstance(parent, (astroid.FunctionDef, astroid.ClassDef, astroid.Module)):
+#             return parent
+#     # Should never happen, but return module as fallback
+#     return node.root()
 
 
-def find_variable_assignments(node: astroid.Name, function_scope: astroid.FunctionDef) -> set[astroid.NodeNG]:
+def find_variable_assignments(node: astroid.Name, function_scope: astroid.FunctionDef) -> list[astroid.NodeNG]:
     """Find all assignments to a variable that can affect the given node according to Python control flow.
     
     Args:
@@ -152,28 +154,15 @@ def find_variable_assignments(node: astroid.Name, function_scope: astroid.Functi
     """
     var_name = node.name
     
-    def is_assignment_to_var(stmt) -> astroid.NodeNG | None:
-        """Check if a statement assigns to our variable and return the assignment node."""
-        if isinstance(stmt, astroid.Assign):
-            for target in stmt.targets:
-                if isinstance(target, astroid.AssignName) and target.name == var_name:
-                    return stmt
-        elif isinstance(stmt, astroid.AnnAssign):
-            if isinstance(stmt.target, astroid.AssignName) and stmt.target.name == var_name:
-                return stmt
-        elif isinstance(stmt, astroid.AugAssign):
-            if isinstance(stmt.target, astroid.Name) and stmt.target.name == var_name:
-                return stmt
-        return None
-    
-    def contains_target_node(tree_node) -> bool:
-        """Check if the target node is somewhere in this subtree."""
-        if tree_node == node:
-            return True
-        for child in tree_node.get_children():
-            if contains_target_node(child):
-                return True
-        return False
+    def get_assigned_values(target, value) -> astroid.NodeNG | None:
+        if isinstance(target, astroid.AssignName) and target.name == var_name:
+            return [value]
+        elif isinstance(target, astroid.Tuple):
+            result = []
+            for i in zip(target.elts, value.elts):
+                result.extend(get_assigned_values(*i))
+            return result
+        return []
     
     def traverse_in_execution_order(statements: list[astroid.NodeNG]) -> list[astroid.NodeNG]:
         """Traverse statements in execution order and return assignments that can affect the target."""
@@ -181,10 +170,12 @@ def find_variable_assignments(node: astroid.Name, function_scope: astroid.Functi
         
         for stmt in statements:
             # Check if the statement itself is an assignment before going deeper
-            assignment = is_assignment_to_var(stmt)
-            if assignment:
-                assignments = [assignment]
-            elif isinstance(stmt, astroid.If):
+            if isinstance(stmt, astroid.Assign):
+                for target in stmt.targets:
+                    assignments.extend(get_assigned_values(target, stmt.value))
+            elif isinstance(stmt, (astroid.AnnAssign, astroid.AugAssign)):
+                assignments.extend(get_assigned_values(stmt.target, stmt.value))
+            if isinstance(stmt, astroid.If):
                 assignments.extend(traverse_in_execution_order(stmt.body))
                 assignments.extend(traverse_in_execution_order(stmt.orelse))
             elif isinstance(stmt, (astroid.While, astroid.For)):
@@ -198,11 +189,33 @@ def find_variable_assignments(node: astroid.Name, function_scope: astroid.Functi
                 assignments.extend(traverse_in_execution_order(stmt.finalbody))
             elif isinstance(stmt, astroid.With):
                 assignments.extend(traverse_in_execution_order(stmt.body))
-
-            # Once we've processed the statement containing the target, we're done
-            if contains_target_node(stmt):
-                break
         
+        return assignments
+    
+    # Start traversal from function body
+    return traverse_in_execution_order(function_scope.body)
+
+
+def find_variable_annotations(node: astroid.Name, function_scope: astroid.FunctionDef) -> list[astroid.NodeNG]:
+    """Find all type annotations for the given variable in th given scope
+    
+    Args:
+        node: The Name node we want to find annotations
+        function_scope: The FunctionDef node containing the target node
+    
+    Returns:
+        Set of assignment nodes that precede the target node in execution order
+    """
+    var_name = node.name
+    
+    def traverse_in_execution_order(statements: list[astroid.NodeNG]) -> list[astroid.NodeNG]:
+        """Traverse statements in execution order and return assignments that can affect the target."""
+        assignments = []
+        
+        for stmt in statements:
+            if isinstance(stmt, (astroid.AnnAssign)) and stmt.target.name == var_name:
+                assignments.extend([stmt])
+                
         return assignments
     
     # Start traversal from function body

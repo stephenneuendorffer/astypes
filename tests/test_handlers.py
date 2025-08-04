@@ -42,7 +42,6 @@ from astypes import get_type
     ('{1,""}',      'set[int | str]'),
 
     # Subscripts
-    ('x[0]',        'None'),
     ('[1][0]',      'int'),
     ('[1,2,3][x]',  'int'),
     ('[1.0][0]',    'float'),
@@ -96,6 +95,7 @@ from astypes import get_type
     ('[].copy()',       'list'),
     ('[].__iter__()',   'Iterator'), 
     ('range(5)',        'range'),
+    ('range(5)[4]',     'int'),
 
     # builtin functions
     ('len(x)',          'int'),
@@ -142,6 +142,7 @@ def test_expr(expr, type):
     'x and y',
     'x = None; x = b(); x',
     'def g() -> x: pass; g()',
+    'x[0]',
 ])
 def test_cannot_infer_expr(expr):
     node = astroid.extract_node(expr)
@@ -154,6 +155,8 @@ def test_cannot_infer_expr(expr):
     ('my_list = list',              'my_list(x)',   'list'),
     ('def g(x): return 0',          'g(x)',         'int'),
     # ('def g(x:Sequence[int]): return x[0:3]',      'g(x)',  'int'),
+    ('def g(x): return x',          'g(3)',         'int'),
+    ('def g(x:int) -> int: return x',      'g(x)',  'int'),
     ('def g(x): \n for i in [1,2]:\n  return i',    'g(x)',         'int'),
     ('class foo:\n def g(x):\n  return x',          'foo()',        'foo'),
     ('class foo:\n def g(x):\n  return x\nclass bar(foo):\n def h():\n  return 0',          'bar()',        'bar'),
@@ -217,12 +220,26 @@ def test_infer_type_from_signature(sig, type):
             return x""", 'int'),
     ('a: int, y: int', 
         """
-            y += a
-            return y""", 'int'),
+            x = y = a
+            return x""", 'int'),
+
+    ('a: int, y: int', 
+        """
+            x, _ = (a, 1.0)
+            return x""", 'int'),
+    ('a: int, y: int', 
+        """
+            (x, _) = (a, 1.0)
+            return x""", 'int'),
+    ('a: int, y: int', 
+        """
+            x += a
+            return x""", 'int'),
     ('a: float, y: int', 
         """
+            x = y
             a += 1
-            return y""", 'int'),
+            return x""", 'int'),
     ('a: int, y: int', 
         """
             x:float = a
@@ -240,16 +257,47 @@ def test_infer_type_from_signature(sig, type):
             return y""", 'int | str'),
     ('a: int, b: str', 
         """
+            while a < 0:
+                y = a
+                a = a + 1
+            else:
+                y = b
+            return y""", 'int | str'),
+    ('a: int, b: str', 
+        """
             y = a
             y = b
-            return y""", 'str'),
+            return y""", 'int | str'),
     ('a: int, b: str', 
         """
             try:
                 y = a
             finally:
                 y = b
-            return y""", 'str'),
+            return y""", 'int | str'),
+    ('a: int, b: str', 
+        """
+            try:
+                y = a
+            except Exception:
+                y = b
+            return y""", 'int | str'),
+    ('a: int, b: str', 
+        """
+            try:
+                y = a
+            except Exception:
+                y = b
+            else:
+                y = b
+            return y""", 'int | str'),
+
+    ('a: int, b: str', 
+        """
+            y = a
+            with foo() as t:
+                y = b
+            return y""", 'int | str'),
     ('a: Sequence[int]', 'return a[0:3]', 'Sequence[int]'),
     ('a: Sequence[int]', 
         """
@@ -261,7 +309,9 @@ def test_infer_body(sig, body, type):
         def f({sig}):
             {body}
     """
+    print(given)
     func = astroid.parse(given).body[-1]
+    print(func)
     assert isinstance(func, astroid.FunctionDef)
     stmt = func.body[-1]
     assert isinstance(stmt, astroid.Return)
@@ -272,6 +322,31 @@ def test_infer_body(sig, body, type):
     assert t is not None
     assert t.annotation == type
 
+@pytest.mark.parametrize('sig, sig2, body, type', [
+    #('a: int', 'b: float', 'return a', 'int'),
+    ('a: int', 'b: float', 'return b', 'float'),
+    ('a: float', 'a: int', 'return a', 'int'),
+])
+def test_infer_body2(sig, sig2, body, type):
+    given = f"""
+        def f({sig}):
+            def g({sig2}):
+                {body}
+    """
+    print(given)
+    func = astroid.parse(given).body[-1]
+    print(func)
+    assert isinstance(func, astroid.FunctionDef)
+    func2 = func.body[-1]
+    assert isinstance(func2, astroid.FunctionDef)
+    stmt = func2.body[-1]
+    assert isinstance(stmt, astroid.Return)
+
+    print(stmt)
+    t = get_type(stmt.value)
+    print(t, ":", stmt.value)
+    assert t is not None
+    assert t.annotation == type
 
 @pytest.mark.parametrize('sig', [
     '',
@@ -292,3 +367,22 @@ def test_cannot_infer_type_from_signature(sig):
     assert isinstance(stmt, astroid.Return)
     t = get_type(stmt)
     assert t is None
+
+
+@pytest.mark.parametrize('sig, type', [
+    ('[1,2,3]', 'int'),
+    ('range(5)', 'int'),
+])
+def test_infer_iterator_type_from_signature(sig, type):
+    given = f"""
+        for i in {sig}:
+            return i
+    """
+    func = astroid.parse(given).body[-1]
+    assert isinstance(func, astroid.For)
+    stmt = func.body[-1]
+    assert isinstance(stmt, astroid.Return)
+    t = get_type(stmt)
+    assert t is not None
+    assert t.annotation == type
+

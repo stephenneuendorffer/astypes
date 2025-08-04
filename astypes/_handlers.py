@@ -11,7 +11,7 @@ import typeshed_client
 
 from ._ass import Ass
 from ._helpers import (
-    conv_node_to_type, find_variable_assignments, get_parent_function, 
+    conv_node_to_type, find_variable_assignments, find_variable_annotations, get_parent_function, 
     get_ret_type_of_fun, infer, is_camel, qname_to_type,
 )
 from ._type import Type
@@ -37,7 +37,8 @@ class Handlers:
             if isinstance(node, supported_type):
                 result = handler(node)
                 if result is not None:
-                    assert not result.unknown
+                    if result.unknown:
+                        return None
                     return result
         return None
 
@@ -49,12 +50,14 @@ class Handlers:
 
 
 handlers = Handlers()
-get_type = handlers.get_type
+def get_type(node: astroid.NodeNG):
+    handlers.bound_names = []
+    return handlers.get_type(node)
 
 
 @handlers.register(astroid.Return)
 def _handle_return(node: astroid.Return) -> Type | None:
-    return get_type(node.value)
+    return handlers.get_type(node.value)
 
 
 @handlers.register(astroid.Const)
@@ -73,7 +76,7 @@ def _handle_fstring(node: astroid.JoinedStr) -> Type | None:
 def _handle_list(node: astroid.List) -> Type | None:
     subtype = Type.new('')
     for element_node in node.elts:
-        element_type = get_type(element_node)
+        element_type = handlers.get_type(element_node)
         if element_type is None:
             return Type.new('list')
         subtype = subtype.merge(element_type)
@@ -86,7 +89,7 @@ def _handle_list(node: astroid.List) -> Type | None:
 def _handle_tuple(node: astroid.Tuple) -> Type | None:
     subtypes = []
     for element_node in node.elts:
-        element_type = get_type(element_node)
+        element_type = handlers.get_type(element_node)
         if element_type is None:
             return Type.new('tuple')
         subtypes.append(element_type)
@@ -99,7 +102,7 @@ def _handle_tuple(node: astroid.Tuple) -> Type | None:
 def _handle_dict(node: astroid.Dict) -> Type | None:
     keys_type = Type.new('')
     for key_node, _ in node.items:
-        key_type = get_type(key_node)
+        key_type = handlers.get_type(key_node)
         if key_type is None:
             key_type = Type.new('')
             break
@@ -107,7 +110,7 @@ def _handle_dict(node: astroid.Dict) -> Type | None:
 
     values_type = Type.new('')
     for _, value_node in node.items:
-        value_type = get_type(value_node)
+        value_type = handlers.get_type(value_node)
         if value_type is None:
             value_type = Type.new('')
             break
@@ -123,9 +126,10 @@ def _handle_dict(node: astroid.Dict) -> Type | None:
 
 @handlers.register(astroid.Subscript)
 def _handle_subscript(node: astroid.Subscript) -> Type | None:
-    t = get_type(node.value)
+    t = handlers.get_type(node.value)
+    logger.debug(f"handle subscript {node} {t}")
     if t is None:
-        return Type.new('None')
+        return None
     
     # Check if this is a slice (like a[0:3]) or single index (like a[0])
     if isinstance(node.slice, astroid.Slice):
@@ -133,17 +137,17 @@ def _handle_subscript(node: astroid.Subscript) -> Type | None:
         return t
     else:
         # For single index access, return the element type
-        if not t._args:
-            return None
-        element_type = Type.new('')
-        element_type = element_type.merge(t._args[0])
-        return element_type
+        base = t.get_sequence_basetype()
+        if base is not None and len(base._args) > 0:
+            logger.debug(f"Element Type is {base._args[0]}")
+            return base._args[0]
+        return None
 
 @handlers.register(astroid.Set)
 def _handle_set(node: astroid.Set) -> Type | None:
     subtype = Type.new('')
     for element_node in node.elts:
-        element_type = get_type(element_node)
+        element_type = handlers.get_type(element_node)
         if element_type is None:
             return Type.new('set')
         subtype = subtype.merge(element_type)
@@ -155,7 +159,7 @@ def _handle_set(node: astroid.Set) -> Type | None:
 def _handle_unary_op(node: astroid.UnaryOp) -> Type | None:
     if node.op == 'not':
         return Type.new('bool')
-    result = get_type(node.operand)
+    result = handlers.get_type(node.operand)
     if result is not None:
         result = result.add_ass(Ass.NO_UNARY_OVERLOAD)
         return result
@@ -165,10 +169,10 @@ def _handle_unary_op(node: astroid.UnaryOp) -> Type | None:
 @handlers.register(astroid.BinOp)
 def _handle_binary_op(node: astroid.BinOp) -> Type | None:
     assert node.op
-    lt = get_type(node.left)
+    lt = handlers.get_type(node.left)
     if lt is None:
         return None
-    rt = get_type(node.right)
+    rt = handlers.get_type(node.right)
     if rt is None:
         return None
     if lt.name == rt.name == 'int':
@@ -187,7 +191,7 @@ def _handle_bool_op(node: astroid.BoolOp) -> Type | None:
     assert node.op
     result = Type.new('')
     for subnode in node.values:
-        type = get_type(subnode)
+        type = handlers.get_type(subnode)
         if type is None:
             return None
         result = result.merge(type)
@@ -252,111 +256,90 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
     infer the type from the type of the iterator.
     Also handle variable assignments in the current scope.
     """
-    # Check for loop variables (pykernel branch feature)
+    # Check for loop variables
     for parent in node.node_ancestors():
         if isinstance(parent, astroid.For):
             if parent.target.name != node.name:
                 continue
-            itertype = get_type(parent.iter)
-            if itertype._name == "Sequence":
-                return itertype._args[0]
+            itertype = handlers.get_type(parent.iter)
+            base = itertype.get_sequence_basetype()
+            if base is not None and len(base._args) > 0:
+                return base._args[0]
             else:
                 return None
         if isinstance(parent, astroid.FunctionDef):
             break
     
     func_node = get_parent_function(node)
+    if func_node is None:
+        return None
     
     # Handle function parameters with annotations
-    if func_node is not None:
-        args = func_node.args
-        anns: Iterator[tuple[astroid.AssignName, astroid.NodeNG]] = chain(
-            zip(args.args, args.annotations),
-            zip(args.posonlyargs, args.posonlyargs_annotations),
-            zip(args.kwonlyargs, args.kwonlyargs_annotations),
-        )
-        for arg, ann in anns:
-            if arg.name != node.name:
-                continue
-            if ann is None:
-                continue
-            result = conv_node_to_type('__main__', ann)
-            if result is None:
-                return None
-            return result.add_ass(Ass.NO_REDEF)
-
-        if args.vararg is not None and args.vararg == node.name:
-            ann = args.varargannotation
-            if ann is not None:
-                result = conv_node_to_type('__main__', ann)
-                if result is not None:
-                    return Type.new('tuple', args=[result], ass={Ass.NO_REDEF})
-            return Type.new('tuple', ass={Ass.NO_REDEF})
-
-        if args.kwarg is not None and args.kwarg == node.name:
-            ann = args.kwargannotation
-            if ann is not None:
-                result = conv_node_to_type('__main__', ann)
-                if result is not None:
-                    targs = [Type.new('str'), result]
-                    return Type.new('dict', args=targs, ass={Ass.NO_REDEF})
-            targs = [Type.new('str'), Type.new('Any', module='typing')]
-            return Type.new(name='dict', args=targs, ass={Ass.NO_REDEF})
-
-    # NEW LOGIC: Handle variable assignments
-    # Only handle variables within function scope
-    if func_node is not None:
-        assignments = find_variable_assignments(node, func_node)
-        
-        if not assignments:
+    args = func_node.args
+    anns: Iterator[tuple[astroid.AssignName, astroid.NodeNG]] = chain(
+        zip(args.args, args.annotations),
+        zip(args.posonlyargs, args.posonlyargs_annotations),
+        zip(args.kwonlyargs, args.kwonlyargs_annotations),
+    )
+    for arg, ann in anns:
+        if arg.name != node.name:
+            continue
+        if ann is None:
+            continue
+        result = conv_node_to_type('__main__', ann)
+        if result is None:
             return None
-    else:
-        return None
-    
-    # Since find_variable_assignments now handles execution order, 
-    # we can use all returned assignments
-    if not assignments:
-        return None
-    
+        return result.add_ass(Ass.NO_REDEF)
+
+    if args.vararg is not None and args.vararg == node.name:
+        ann = args.varargannotation
+        if ann is not None:
+            result = conv_node_to_type('__main__', ann)
+            if result is not None:
+                return Type.new('tuple', args=[result], ass={Ass.NO_REDEF})
+        return Type.new('tuple', ass={Ass.NO_REDEF})
+
+    if args.kwarg is not None and args.kwarg == node.name:
+        ann = args.kwargannotation
+        if ann is not None:
+            result = conv_node_to_type('__main__', ann)
+            if result is not None:
+                targs = [Type.new('str'), result]
+                return Type.new('dict', args=targs, ass={Ass.NO_REDEF})
+        targs = [Type.new('str'), Type.new('Any', module='typing')]
+        return Type.new(name='dict', args=targs, ass={Ass.NO_REDEF})
+
+    assignments = find_variable_assignments(node, func_node)
+    annotations = find_variable_annotations(node, func_node)
+
     # Collect types from all relevant assignments
     result_type = Type.new('')
-    has_annotation = False
+
+    # Don't try to recurse if we've already walked this name.  
+    # FIXME: should fixed point here.
+    if node.name in handlers.bound_names:
+        return result_type
     
-    print(assignments)
-    for assignment in assignments:
+    print("Finding type for node: ", node)
+    for value in assignments:
+        print("From: ", value)
+
+    for value in assignments:
+        handlers.bound_names.extend([node.name])
+        value_type = handlers.get_type(value)
+        if value_type is not None:
+            result_type = result_type.merge(value_type)
+
+    for stmt in annotations:
         # Handle type annotations (AnnAssign) - these take precedence
-        if isinstance(assignment, astroid.AnnAssign):
-            if assignment.annotation is not None:
-                ann_type = conv_node_to_type('__main__', assignment.annotation)
+        if isinstance(stmt, astroid.AnnAssign):
+            if stmt.annotation is not None:
+                ann_type = conv_node_to_type('__main__', stmt.annotation)
                 if ann_type is not None:
-                    has_annotation = True
                     result_type = result_type.merge(ann_type)
-            # Also consider the assigned value if present
-            if assignment.value is not None:
-                value_type = get_type(assignment.value)
-                if value_type is not None:
-                    result_type = result_type.merge(value_type)
-        
-        # Handle regular assignments (Assign)
-        elif isinstance(assignment, astroid.Assign):
-            value_type = get_type(assignment.value)
-            if value_type is not None:
-                result_type = result_type.merge(value_type)
-        
-        # Handle augmented assignments (AugAssign)
-        elif isinstance(assignment, astroid.AugAssign):
-            value_type = get_type(assignment.value)
-            if value_type is not None:
-                result_type = result_type.merge(value_type)
 
     if result_type.unknown:
         return None
-    
-    # Add appropriate assumptions
-    if has_annotation:
-        result_type = result_type.add_ass(Ass.NO_REDEF)
-    else:
-        result_type = result_type.add_ass(Ass.ALL_ASSIGNS_SAME)
     
     return result_type
 
@@ -384,6 +367,7 @@ def _handle_call_infer(node: astroid.Call) -> Type | None:
         if not isinstance(def_node, astroid.FunctionDef):
             continue
         mod_name, _, fun_name = def_node.qname().rpartition('.')
+        # First check if there is a return type annotation
         ret_type = conv_node_to_type(mod_name, def_node.returns)
         if ret_type is not None:
             return ret_type
@@ -394,7 +378,7 @@ def _handle_call_infer(node: astroid.Call) -> Type | None:
 
 
 def _get_attr_call_type(node: astroid.Attribute) -> Type | None:
-    expr_type = get_type(node.expr)
+    expr_type = handlers.get_type(node.expr)
     if expr_type is None:
         logger.debug('cannot get type of the left side of attribute')
         return None
