@@ -119,3 +119,61 @@ def conv_node_to_type(
 
     logger.debug('cannot resolve return AST node into a known type')
     return None
+
+
+def get_parent_function(node: astroid.NodeNG) -> astroid.FunctionDef | None:
+    """Find the node of the function that contains the given node.
+    """
+    for parent in node.node_ancestors():
+        if isinstance(parent, astroid.FunctionDef):
+            return parent
+    return None
+
+
+def get_parent_scope(node: astroid.NodeNG) -> astroid.NodeNG:
+    """Find the scope that contains the given node (function, class, or module).
+    """
+    for parent in node.node_ancestors():
+        if isinstance(parent, (astroid.FunctionDef, astroid.ClassDef, astroid.Module)):
+            return parent
+    # Should never happen, but return module as fallback
+    return node.root()
+
+
+def find_variable_assignments(node: astroid.Name, scope: astroid.NodeNG) -> list[astroid.NodeNG]:
+    """Find all assignments to a variable with the given name in the specified scope.
+    
+    Returns list of assignment nodes (Assign, AugAssign, AnnAssign) that assign to the variable.
+    """
+    assignments = []
+    var_name = node.name
+    
+    def visit_node(n):
+        # Check different types of assignment nodes
+        if isinstance(n, astroid.Assign):
+            for target in n.targets:
+                if isinstance(target, astroid.Name) and target.name == var_name:
+                    assignments.append(n)
+        elif isinstance(n, astroid.AnnAssign):
+            if isinstance(n.target, astroid.Name) and n.target.name == var_name:
+                assignments.append(n)
+        elif isinstance(n, astroid.AugAssign):
+            if isinstance(n.target, astroid.Name) and n.target.name == var_name:
+                assignments.append(n)
+        
+        # Recursively visit child nodes, but stop at nested functions/classes
+        # to respect scope boundaries
+        for child in n.get_children():
+            if not isinstance(child, (astroid.FunctionDef, astroid.ClassDef)):
+                visit_node(child)
+    
+    visit_node(scope)
+    return assignments
+
+
+def is_assignment_before_node(assignment: astroid.NodeNG, node: astroid.NodeNG) -> bool:
+    """Check if an assignment occurs before the given node in execution order.
+    
+    This is a simplified check based on line numbers.
+    """
+    return (assignment.lineno or 0) < (node.lineno or 0)
