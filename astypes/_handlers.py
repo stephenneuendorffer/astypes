@@ -12,8 +12,7 @@ import typeshed_client
 from ._ass import Ass
 from ._helpers import (
     conv_node_to_type, find_variable_assignments, get_parent_function, 
-    get_parent_scope, get_ret_type_of_fun, infer, is_assignment_before_node,
-    is_camel, qname_to_type,
+    get_ret_type_of_fun, infer, is_camel, qname_to_type,
 )
 from ._type import Type
 
@@ -323,6 +322,7 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
     result_type = Type.new('')
     has_annotation = False
     
+    print(assignments)
     for assignment in assignments:
         # Handle type annotations (AnnAssign) - these take precedence
         if isinstance(assignment, astroid.AnnAssign):
@@ -338,13 +338,13 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
                     result_type = result_type.merge(value_type)
         
         # Handle regular assignments (Assign)
-        elif isinstance(assignment, astroid.Assign) and assignment.value is not None:
+        elif isinstance(assignment, astroid.Assign):
             value_type = get_type(assignment.value)
             if value_type is not None:
                 result_type = result_type.merge(value_type)
         
         # Handle augmented assignments (AugAssign)
-        elif isinstance(assignment, astroid.AugAssign) and assignment.value is not None:
+        elif isinstance(assignment, astroid.AugAssign):
             value_type = get_type(assignment.value)
             if value_type is not None:
                 result_type = result_type.merge(value_type)

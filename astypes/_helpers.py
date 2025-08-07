@@ -180,63 +180,30 @@ def find_variable_assignments(node: astroid.Name, function_scope: astroid.Functi
         assignments = []
         
         for stmt in statements:
-            # If this statement contains our target node, we need to be careful
+            # Check if the statement itself is an assignment before going deeper
+            assignment = is_assignment_to_var(stmt)
+            if assignment:
+                assignments = [assignment]
+            elif isinstance(stmt, astroid.If):
+                assignments.extend(traverse_in_execution_order(stmt.body))
+                assignments.extend(traverse_in_execution_order(stmt.orelse))
+            elif isinstance(stmt, (astroid.While, astroid.For)):
+                assignments.extend(traverse_in_execution_order(stmt.body))
+                assignments.extend(traverse_in_execution_order(stmt.orelse))
+            elif isinstance(stmt, astroid.Try):
+                assignments.extend(traverse_in_execution_order(stmt.body))
+                for handler in stmt.handlers:
+                    assignments.extend(traverse_in_execution_order(handler.body))
+                assignments.extend(traverse_in_execution_order(stmt.orelse))
+                assignments.extend(traverse_in_execution_order(stmt.finalbody))
+            elif isinstance(stmt, astroid.With):
+                assignments.extend(traverse_in_execution_order(stmt.body))
+
+            # Once we've processed the statement containing the target, we're done
             if contains_target_node(stmt):
-                # Check if the statement itself is an assignment before going deeper
-                assignment = is_assignment_to_var(stmt)
-                if assignment:
-                    assignments.append(assignment)
-                
-                # Recurse into control structures, but stop when we find the target
-                if isinstance(stmt, astroid.If):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
-                    assignments.extend(traverse_in_execution_order(stmt.orelse))
-                elif isinstance(stmt, (astroid.While, astroid.For)):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
-                    assignments.extend(traverse_in_execution_order(stmt.orelse))
-                elif isinstance(stmt, astroid.Try):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
-                    for handler in stmt.handlers:
-                        assignments.extend(traverse_in_execution_order(handler.body))
-                    assignments.extend(traverse_in_execution_order(stmt.orelse))
-                    assignments.extend(traverse_in_execution_order(stmt.finalbody))
-                elif isinstance(stmt, astroid.With):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
-                
-                # Once we've processed the statement containing the target, we're done
                 break
-            else:
-                # This statement doesn't contain the target, so any assignment here can affect it
-                assignment = is_assignment_to_var(stmt)
-                if assignment:
-                    assignments.append(assignment)
-                
-                # Also check assignments within control structures
-                if isinstance(stmt, astroid.If):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
-                    assignments.extend(traverse_in_execution_order(stmt.orelse))
-                elif isinstance(stmt, (astroid.While, astroid.For)):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
-                    assignments.extend(traverse_in_execution_order(stmt.orelse))
-                elif isinstance(stmt, astroid.Try):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
-                    for handler in stmt.handlers:
-                        assignments.extend(traverse_in_execution_order(handler.body))
-                    assignments.extend(traverse_in_execution_order(stmt.orelse))
-                    assignments.extend(traverse_in_execution_order(stmt.finalbody))
-                elif isinstance(stmt, astroid.With):
-                    assignments.extend(traverse_in_execution_order(stmt.body))
         
         return assignments
     
     # Start traversal from function body
-    assignment_list = traverse_in_execution_order(function_scope.body)
-    return set(assignment_list)
-
-
-def is_assignment_before_node(assignment: astroid.NodeNG, node: astroid.NodeNG) -> bool:
-    """Check if an assignment occurs before the given node in execution order.
-    
-    This is a simplified check based on line numbers.
-    """
-    return (assignment.lineno or 0) < (node.lineno or 0)
+    return traverse_in_execution_order(function_scope.body)

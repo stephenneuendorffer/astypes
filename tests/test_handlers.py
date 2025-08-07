@@ -153,6 +153,7 @@ def test_cannot_infer_expr(expr):
     ('from math import sin',        'sin(x)',       'float'),
     ('my_list = list',              'my_list(x)',   'list'),
     ('def g(x): return 0',          'g(x)',         'int'),
+    # ('def g(x:Sequence[int]): return x[0:3]',      'g(x)',  'int'),
     ('def g(x): \n for i in [1,2]:\n  return i',    'g(x)',         'int'),
     ('class foo:\n def g(x):\n  return x',          'foo()',        'foo'),
     ('class foo:\n def g(x):\n  return x\nclass bar(foo):\n def h():\n  return 0',          'bar()',        'bar'),
@@ -203,6 +204,71 @@ def test_infer_type_from_signature(sig, type):
     stmt = func.body[-1]
     assert isinstance(stmt, astroid.Return)
     t = get_type(stmt)
+    assert t is not None
+    assert t.annotation == type
+
+@pytest.mark.parametrize('sig, body, type', [
+    ('a: int', 'return a', 'int'),
+    ('a: Sequence[int]', 'return a', 'Sequence[int]'),
+    ('a: Sequence[int]', 'return a[0]', 'int'),
+    ('a: int, y: int', 
+        """
+            x = a
+            return x""", 'int'),
+    ('a: int, y: int', 
+        """
+            y += a
+            return y""", 'int'),
+    ('a: float, y: int', 
+        """
+            a += 1
+            return y""", 'int'),
+    ('a: int, y: int', 
+        """
+            x:float = a
+            return x""", 'float'),
+    ('a: int, y: int', 
+        """
+            z:float = a
+            return a""", 'int'),
+    ('a: int, b: str', 
+        """
+            if a > 0:
+                y = a
+            else:
+                y = b
+            return y""", 'int | str'),
+    ('a: int, b: str', 
+        """
+            y = a
+            y = b
+            return y""", 'str'),
+    ('a: int, b: str', 
+        """
+            try:
+                y = a
+            finally:
+                y = b
+            return y""", 'str'),
+    ('a: Sequence[int]', 'return a[0:3]', 'Sequence[int]'),
+    ('a: Sequence[int]', 
+        """
+            x = a
+            return x[0:3]""", 'Sequence[int]'),
+])
+def test_infer_body(sig, body, type):
+    given = f"""
+        def f({sig}):
+            {body}
+    """
+    func = astroid.parse(given).body[-1]
+    assert isinstance(func, astroid.FunctionDef)
+    stmt = func.body[-1]
+    assert isinstance(stmt, astroid.Return)
+
+    print(stmt)
+    t = get_type(stmt.value)
+    print(t, ":", stmt.value)
     assert t is not None
     assert t.annotation == type
 
