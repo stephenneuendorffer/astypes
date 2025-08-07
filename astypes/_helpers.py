@@ -140,35 +140,98 @@ def get_parent_scope(node: astroid.NodeNG) -> astroid.NodeNG:
     return node.root()
 
 
-def find_variable_assignments(node: astroid.Name, scope: astroid.NodeNG) -> list[astroid.NodeNG]:
-    """Find all assignments to a variable with the given name in the specified scope.
+def find_variable_assignments(node: astroid.Name, function_scope: astroid.FunctionDef) -> set[astroid.NodeNG]:
+    """Find all assignments to a variable that can affect the given node according to Python control flow.
     
-    Returns list of assignment nodes (Assign, AugAssign, AnnAssign) that assign to the variable.
+    Args:
+        node: The Name node we want to find assignments for
+        function_scope: The FunctionDef node containing the target node
+    
+    Returns:
+        Set of assignment nodes that precede the target node in execution order
     """
-    assignments = []
     var_name = node.name
     
-    def visit_node(n):
-        # Check different types of assignment nodes
-        if isinstance(n, astroid.Assign):
-            for target in n.targets:
-                if isinstance(target, astroid.Name) and target.name == var_name:
-                    assignments.append(n)
-        elif isinstance(n, astroid.AnnAssign):
-            if isinstance(n.target, astroid.Name) and n.target.name == var_name:
-                assignments.append(n)
-        elif isinstance(n, astroid.AugAssign):
-            if isinstance(n.target, astroid.Name) and n.target.name == var_name:
-                assignments.append(n)
-        
-        # Recursively visit child nodes, but stop at nested functions/classes
-        # to respect scope boundaries
-        for child in n.get_children():
-            if not isinstance(child, (astroid.FunctionDef, astroid.ClassDef)):
-                visit_node(child)
+    def is_assignment_to_var(stmt) -> astroid.NodeNG | None:
+        """Check if a statement assigns to our variable and return the assignment node."""
+        if isinstance(stmt, astroid.Assign):
+            for target in stmt.targets:
+                if isinstance(target, astroid.AssignName) and target.name == var_name:
+                    return stmt
+        elif isinstance(stmt, astroid.AnnAssign):
+            if isinstance(stmt.target, astroid.AssignName) and stmt.target.name == var_name:
+                return stmt
+        elif isinstance(stmt, astroid.AugAssign):
+            if isinstance(stmt.target, astroid.Name) and stmt.target.name == var_name:
+                return stmt
+        return None
     
-    visit_node(scope)
-    return assignments
+    def contains_target_node(tree_node) -> bool:
+        """Check if the target node is somewhere in this subtree."""
+        if tree_node == node:
+            return True
+        for child in tree_node.get_children():
+            if contains_target_node(child):
+                return True
+        return False
+    
+    def traverse_in_execution_order(statements: list[astroid.NodeNG]) -> list[astroid.NodeNG]:
+        """Traverse statements in execution order and return assignments that can affect the target."""
+        assignments = []
+        
+        for stmt in statements:
+            # If this statement contains our target node, we need to be careful
+            if contains_target_node(stmt):
+                # Check if the statement itself is an assignment before going deeper
+                assignment = is_assignment_to_var(stmt)
+                if assignment:
+                    assignments.append(assignment)
+                
+                # Recurse into control structures, but stop when we find the target
+                if isinstance(stmt, astroid.If):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+                    assignments.extend(traverse_in_execution_order(stmt.orelse))
+                elif isinstance(stmt, (astroid.While, astroid.For)):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+                    assignments.extend(traverse_in_execution_order(stmt.orelse))
+                elif isinstance(stmt, astroid.Try):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+                    for handler in stmt.handlers:
+                        assignments.extend(traverse_in_execution_order(handler.body))
+                    assignments.extend(traverse_in_execution_order(stmt.orelse))
+                    assignments.extend(traverse_in_execution_order(stmt.finalbody))
+                elif isinstance(stmt, astroid.With):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+                
+                # Once we've processed the statement containing the target, we're done
+                break
+            else:
+                # This statement doesn't contain the target, so any assignment here can affect it
+                assignment = is_assignment_to_var(stmt)
+                if assignment:
+                    assignments.append(assignment)
+                
+                # Also check assignments within control structures
+                if isinstance(stmt, astroid.If):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+                    assignments.extend(traverse_in_execution_order(stmt.orelse))
+                elif isinstance(stmt, (astroid.While, astroid.For)):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+                    assignments.extend(traverse_in_execution_order(stmt.orelse))
+                elif isinstance(stmt, astroid.Try):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+                    for handler in stmt.handlers:
+                        assignments.extend(traverse_in_execution_order(handler.body))
+                    assignments.extend(traverse_in_execution_order(stmt.orelse))
+                    assignments.extend(traverse_in_execution_order(stmt.finalbody))
+                elif isinstance(stmt, astroid.With):
+                    assignments.extend(traverse_in_execution_order(stmt.body))
+        
+        return assignments
+    
+    # Start traversal from function body
+    assignment_list = traverse_in_execution_order(function_scope.body)
+    return set(assignment_list)
 
 
 def is_assignment_before_node(assignment: astroid.NodeNG, node: astroid.NodeNG) -> bool:

@@ -305,26 +305,25 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
             return Type.new(name='dict', args=targs, ass={Ass.NO_REDEF})
 
     # NEW LOGIC: Handle variable assignments
-    scope = get_parent_scope(node)
-    assignments = find_variable_assignments(node, scope)
-    
-    if not assignments:
+    # Only handle variables within function scope
+    if func_node is not None:
+        assignments = find_variable_assignments(node, func_node)
+        
+        if not assignments:
+            return None
+    else:
         return None
     
-    # Filter assignments that occur before this node
-    relevant_assignments = [
-        assign for assign in assignments 
-        if is_assignment_before_node(assign, node)
-    ]
-    
-    if not relevant_assignments:
+    # Since find_variable_assignments now handles execution order, 
+    # we can use all returned assignments
+    if not assignments:
         return None
     
     # Collect types from all relevant assignments
     result_type = Type.new('')
     has_annotation = False
     
-    for assignment in relevant_assignments:
+    for assignment in assignments:
         # Handle type annotations (AnnAssign) - these take precedence
         if isinstance(assignment, astroid.AnnAssign):
             if assignment.annotation is not None:
@@ -349,7 +348,7 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
             value_type = get_type(assignment.value)
             if value_type is not None:
                 result_type = result_type.merge(value_type)
-    
+
     if result_type.unknown:
         return None
     
