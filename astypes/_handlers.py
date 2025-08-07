@@ -127,9 +127,18 @@ def _handle_subscript(node: astroid.Subscript) -> Type | None:
     t = get_type(node.value)
     if t is None:
         return Type.new('None')
-    element_type = Type.new('')
-    element_type = element_type.merge(t._args[0])
-    return element_type
+    
+    # Check if this is a slice (like a[0:3]) or single index (like a[0])
+    if isinstance(node.slice, astroid.Slice):
+        # For slices, return the container type
+        return t
+    else:
+        # For single index access, return the element type
+        if not t._args:
+            return None
+        element_type = Type.new('')
+        element_type = element_type.merge(t._args[0])
+        return element_type
 
 @handlers.register(astroid.Set)
 def _handle_set(node: astroid.Set) -> Type | None:
