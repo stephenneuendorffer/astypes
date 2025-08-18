@@ -124,6 +124,16 @@ def _handle_dict(node: astroid.Dict) -> Type | None:
         values_type = Type.new('Any', module='typing')
     return Type.new('dict', args=[keys_type, values_type])
 
+def isSlice(node: astroid.Tuple | astroid.Slice):
+    if isinstance(node, astroid.Tuple):
+        for i in node.elts:
+            if isSlice(i):
+                return True
+        return False
+    if isinstance(node, astroid.Slice):
+        return True
+    return False
+    
 @handlers.register(astroid.Subscript)
 def _handle_subscript(node: astroid.Subscript) -> Type | None:
     t = handlers.get_type(node.value)
@@ -132,7 +142,7 @@ def _handle_subscript(node: astroid.Subscript) -> Type | None:
         return None
     
     # Check if this is a slice (like a[0:3]) or single index (like a[0])
-    if isinstance(node.slice, astroid.Slice):
+    if isSlice(node.slice):
         # For slices, return the container type
         return t
     else:
@@ -320,9 +330,9 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
     if node.name in handlers.bound_names:
         return result_type
     
-    print("Finding type for node: ", node)
-    for value in assignments:
-        print("From: ", value)
+    # print("Finding type for node: ", node)
+    # for value in assignments:
+    #     print("From: ", value)
 
     for value in assignments:
         handlers.bound_names.extend([node.name])

@@ -299,6 +299,11 @@ def test_infer_type_from_signature(sig, type):
                 y = b
             return y""", 'int | str'),
     ('a: Sequence[int]', 'return a[0:3]', 'Sequence[int]'),
+    ('a: Sequence[int]', 'return a[0:2,0:3]', 'Sequence[int]'),
+    ('a: Sequence[int]', """
+            x = a[0,0:3]
+            y = a[0,0]
+            return y""", 'int'),
     ('a: Sequence[int]', 
         """
             x = a
