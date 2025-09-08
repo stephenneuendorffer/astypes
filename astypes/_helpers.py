@@ -105,6 +105,10 @@ def conv_node_to_type(
             args.append(arg_type)
         return base_type.add_args(args)
 
+    # Handle bare references to things in qualified packages, e.g. np.int32
+    if isinstance(node, (astroid.Attribute)):
+        return Type.new(node.attrname, ass={Ass.NO_SHADOWING}, module=node.expr.name)
+
     # for regular name, check if it is a typing primitive or a built-in
     name: str | None = None
     if isinstance(node, ast.Name):

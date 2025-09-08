@@ -218,6 +218,12 @@ def test_infer_type_from_signature(sig, type):
         """
             x = a
             return x""", 'int'),
+    ('a: np.int32', 
+        """
+            return a""", 'int32'),
+    ('a: np.int16', 
+        """
+            return a""", 'int16'),
     ('a: int, y: int', 
         """
             x = y = a
@@ -311,6 +317,7 @@ def test_infer_type_from_signature(sig, type):
 ])
 def test_infer_body(sig, body, type):
     given = f"""
+        import numpy as np
         def f({sig}):
             {body}
     """
