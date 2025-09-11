@@ -20,6 +20,6 @@ class Ass(Enum):
     # assume that all CamelCase names are types
     CAMEL_CASE_IS_TYPE = 'camel-case-is-type'
     # assume that built-in types and functions aren't shadowed
-    NO_SHADOWING = 'camel-case-is-type'
+    NO_SHADOWING = 'no-shadowing'
     # assume that if variable is once annotated its type never changes in the scope
-    NO_REDEF = 'camel-case-is-type'
+    NO_REDEF = 'no-redef'

@@ -107,7 +107,15 @@ def conv_node_to_type(
 
     # Handle bare references to things in qualified packages, e.g. np.int32
     if isinstance(node, (astroid.Attribute)):
-        return Type.new(node.attrname, ass={Ass.NO_SHADOWING}, module=node.expr.name)
+        result = Type.new('')
+        for def_node in infer(node):
+            type = qname_to_type(def_node.qname())
+            if type is None:
+                continue
+            result = result.merge(type)
+        if result.name in ('', 'None'):
+            return None
+        return result.add_ass(Ass.NO_REDEF)
 
     # for regular name, check if it is a typing primitive or a built-in
     name: str | None = None
@@ -158,7 +166,7 @@ def find_variable_assignments(node: astroid.Name, function_scope: astroid.Functi
     """
     var_name = node.name
     
-    def get_assigned_values(target, value) -> astroid.NodeNG | None:
+    def get_assigned_values(target, value) -> astroid.NodeNG:
         if isinstance(target, astroid.AssignName) and target.name == var_name:
             return [value]
         elif isinstance(target, astroid.Tuple):

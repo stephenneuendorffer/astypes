@@ -237,10 +237,14 @@ def _handle_gen_expr(node: astroid.GeneratorExp) -> Type | None:
 
 @handlers.register(astroid.Call)
 def _handle_call(node: astroid.Call) -> Type | None:
+    logger.debug('trying to get non-inferrable type of call ' + str(node) + " " + str(node.func))
     if isinstance(node.func, astroid.Attribute):
         result = _get_attr_call_type(node.func)
         if result is not None:
+            logger.debug('  type is ', result)
             return result
+        else:
+            logger.debug('  failed to get type')
     if isinstance(node.func, astroid.Name):
         _, symbol_defs = node.func.lookup(node.func.name)
         mod_name = 'builtins'
@@ -255,9 +259,12 @@ def _handle_call(node: astroid.Call) -> Type | None:
             return Type.new(node.func.name, ass={Ass.CAMEL_CASE_IS_TYPE})
     return None
 
+@handlers.register(astroid.AssignName)
+def _handle_assigned_name(node: astroid.AssignName) -> Type | None:
+    return _handle_annotated_attribute(node)
 
 @handlers.register(astroid.Name)
-def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
+def _handle_annotated_attribute(node: astroid.Name | astroid.AssignName) -> Type | None:
     """
     Look in an outer scope of the operation to find a definition
     of the name.
@@ -266,6 +273,7 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
     infer the type from the type of the iterator.
     Also handle variable assignments in the current scope.
     """
+
     # Check for loop variables
     for parent in node.node_ancestors():
         if isinstance(parent, astroid.For):
@@ -330,10 +338,6 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
     if node.name in handlers.bound_names:
         return result_type
     
-    # print("Finding type for node: ", node)
-    # for value in assignments:
-    #     print("From: ", value)
-
     for value in assignments:
         handlers.bound_names.extend([node.name])
         value_type = handlers.get_type(value)
@@ -358,14 +362,14 @@ def _handle_annotated_attribute(node: astroid.Name) -> Type | None:
 def _handle_infer_any(node: astroid.NodeNG) -> Type | None:
     result = Type.new('')
     for def_node in infer(node):
-        if not isinstance(def_node, astroid.Instance):
-            result = result.add_ass(Ass.ALL_ASSIGNS_SAME)
-            continue
-        type = qname_to_type(def_node.pytype())
-        if type is None:
-            result = result.add_ass(Ass.ALL_ASSIGNS_SAME)
-            continue
-        result = result.merge(type)
+        type = None
+        if isinstance(def_node, (astroid.Instance,
+                                astroid.ClassDef,
+                                astroid.Module,
+                                astroid.FunctionDef)):
+            type = qname_to_type(def_node.qname())
+        if type is not None:
+            result = result.merge(type)
     if result.name in ('', 'None'):
         return None
     return result
@@ -390,7 +394,6 @@ def _handle_call_infer(node: astroid.Call) -> Type | None:
 def _get_attr_call_type(node: astroid.Attribute) -> Type | None:
     expr_type = handlers.get_type(node.expr)
     if expr_type is None:
-        logger.debug('cannot get type of the left side of attribute')
         return None
     module = typeshed_client.get_stub_names('builtins')
     assert module is not None

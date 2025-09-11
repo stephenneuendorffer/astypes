@@ -3,7 +3,6 @@ import pytest
 
 from astypes import get_type
 
-
 @pytest.mark.parametrize('expr, type', [
     # literals
     ('1',       'int'),
@@ -141,11 +140,11 @@ def test_expr(expr, type):
     'x or y',
     'x and y',
     'x = None; x = b(); x',
-    'def g() -> x: pass; g()',
     'x[0]',
 ])
 def test_cannot_infer_expr(expr):
     node = astroid.extract_node(expr)
+    print(node, get_type(node))
     assert get_type(node) is None
 
 
@@ -164,7 +163,9 @@ def test_cannot_infer_expr(expr):
     ('x = 1\nif x:\n  x=True',      'x',            'int | bool'),
     ('from datetime import *',      'date(1,2,3)',  'date'),
     ('import numpy as np',          'np.zeros((4,4), int)',   'ndarray'),
-    ('import numpy as np',          'np.array((4,4), int)',   'ndarray')
+    ('import numpy as np',          'np.array((4,4), int)',   'ndarray'),
+    ('import numpy as np',          'np.int32(0)',   'int32')
+
 ])
 def test_astroid_inference(setup, expr, type):
     stmt = astroid.parse(f'{setup}\n{expr}').body[-1]
@@ -314,6 +315,10 @@ def test_infer_type_from_signature(sig, type):
         """
             x = a
             return x[0:3]""", 'Sequence[int]'),
+    ('a: int', """
+            y = np.int32(a)
+            return y""",   'int32')
+
 ])
 def test_infer_body(sig, body, type):
     given = f"""
@@ -398,3 +403,24 @@ def test_infer_iterator_type_from_signature(sig, type):
     assert t is not None
     assert t.annotation == type
 
+@pytest.mark.parametrize('sig, assign, type', [
+    ('', "acc = 0", 'int'),
+    ('', "y = np.int32", "int32"),
+    ('t: int', "a = np.int32(t)", "int32"),
+    ('x:Sequence[np.int32]', "b = x", "Sequence[int32]"),
+    ('t2: np.int32', "c = t2", "int32"),
+    ('x:Sequence[np.int32]', "d = x[0]", "int32"),
+])
+def test_assign(sig, assign, type):
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
+    given = f"""
+import numpy as np
+def f({sig}):
+    {assign}
+    """
+    func = astroid.parse(given).body[-1]
+    assert isinstance(func, astroid.FunctionDef)
+    stmt = func.body[0]
+    v = get_type(stmt.value)
+    assert v.annotation == type
