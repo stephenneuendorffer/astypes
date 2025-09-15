@@ -410,17 +410,42 @@ def test_infer_iterator_type_from_signature(sig, type):
     ('x:Sequence[np.int32]', "b = x", "Sequence[int32]"),
     ('t2: np.int32', "c = t2", "int32"),
     ('x:Sequence[np.int32]', "d = x[0]", "int32"),
+    ('x:np.ndarray[np.int32]', "b = x", "ndarray[int32]"),
+    ('x:np.ndarray[np.int32]', "d = x[0]", "int32"),
+
+    ('', "y = np_ml.bfloat16", "bfloat16"),
+    ('t: int', "a = np_ml.bfloat16(t)", "bfloat16"),
+    ('x:Sequence[np_ml.bfloat16]', "b = x", "Sequence[bfloat16]"),
+    ('t2: np_ml.bfloat16', "c = t2", "bfloat16"),
+    ('x:Sequence[np_ml.bfloat16]', "d = x[0]", "bfloat16"),
+    ('x:np.ndarray[np_ml.bfloat16]', "b = x", "ndarray[bfloat16]"),
+    ('x:np.ndarray[np_ml.bfloat16]', "d = x[0]", "bfloat16"),
+
 ])
 def test_assign(sig, assign, type):
     import logging
     logging.basicConfig(level=logging.DEBUG)
     given = f"""
+import ml_dtypes as np_ml
 import numpy as np
 def f({sig}):
     {assign}
     """
+
+    ### Inject some type definitions into astroid, so we can properly infer them.
+    def ml_dtypes_transform():
+        return astroid.parse("""
+        class bfloat16(floating): pass
+        """
+        )
+
+    astroid.register_module_extender(
+        astroid.MANAGER, "ml_dtypes", ml_dtypes_transform
+    )
+
     func = astroid.parse(given).body[-1]
     assert isinstance(func, astroid.FunctionDef)
     stmt = func.body[0]
     v = get_type(stmt.value)
+    print(stmt.value)
     assert v.annotation == type

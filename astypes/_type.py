@@ -198,7 +198,7 @@ class Type:
         return True
 
     def get_sequence_basetype(self) -> Type | None:
-        if self._name == "Sequence" or self._name == "list":
+        if self._name == "Sequence" or self._name == "list" or self._name == "ndarray":
             return self
         for t in self._basetypes:
             base = t.get_sequence_basetype()
